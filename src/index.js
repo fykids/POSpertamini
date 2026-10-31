@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 
 const app = new Hono();
 const fail = (c, status, message) =>
@@ -19,6 +20,28 @@ const positiveNumber = (value) => {
 };
 const money = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
 const liters = (value) => Math.round((value + Number.EPSILON) * 1000) / 1000;
+
+// 1. TAMPILKAN STATUS PADA ROUTE ROOT (Agar tidak 404 saat dibuka di browser)
+app.get("/", (c) => {
+    return c.json({
+        status: "online",
+        service: "POS Pertamini D1 Bridge API",
+        timestamp: new Date().toISOString(),
+    });
+});
+
+// 2. PASANG CORS LEBIH DULU (Wajib sebelum middleware auth agar OPTIONS diproses)
+app.use(
+    "/api/*",
+    cors({
+        origin: [
+            "https://pospertamini.pages.dev", // Domain Cloudflare Pages kamu
+            "http://localhost:8000",
+        ],
+        allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allowHeaders: ["Content-Type", "Authorization"],
+    }),
+);
 
 app.use("/api/*", async (c, next) => {
     const bridgeSecret = c.env.BRIDGE_SECRET_KEY;
@@ -56,14 +79,26 @@ const numberOrZero = (value) => {
 };
 
 const productPayload = (body) => ({
-    name: typeof body?.name === "string" ? body.name.trim() : String(body?.name ?? "").trim(),
+    name:
+        typeof body?.name === "string"
+            ? body.name.trim()
+            : String(body?.name ?? "").trim(),
     price: numberOrZero(body?.price_per_liter ?? body?.pricePerLiter),
-    cost: numberOrZero(body?.buying_price_per_liter ?? body?.buyingPricePerLiter ?? body?.cost_per_liter ?? body?.costPerLiter),
+    cost: numberOrZero(
+        body?.buying_price_per_liter ??
+            body?.buyingPricePerLiter ??
+            body?.cost_per_liter ??
+            body?.costPerLiter,
+    ),
     stock: numberOrZero(body?.current_stock ?? body?.currentStock),
     capacity: numberOrZero(body?.capacity),
-    note: typeof (body?.note ?? body?.supplier_note ?? body?.supplierNote) === "string"
-        ? String(body.note ?? body.supplier_note ?? body.supplierNote).trim().slice(0, 2000)
-        : null,
+    note:
+        typeof (body?.note ?? body?.supplier_note ?? body?.supplierNote) ===
+        "string"
+            ? String(body.note ?? body.supplier_note ?? body.supplierNote)
+                  .trim()
+                  .slice(0, 2000)
+            : null,
 });
 
 app.get("/api/products", async (c) => {
@@ -86,23 +121,67 @@ app.get("/api/products/:id", async (c) => {
 app.post("/api/products", async (c) => {
     try {
         const data = productPayload(await c.req.json().catch(() => null));
-        if (!data.name || data.price <= 0 || data.cost < 0 || data.stock < 0 || data.capacity <= 0 || data.stock > data.capacity) {
-            console.warn("Product validation failed", { name: data.name, price: data.price, cost: data.cost, stock: data.stock, capacity: data.capacity });
-            return fail(c, 422, "Data produk tidak valid. Pastikan nama, harga jual, dan kapasitas benar.");
+        if (
+            !data.name ||
+            data.price <= 0 ||
+            data.cost < 0 ||
+            data.stock < 0 ||
+            data.capacity <= 0 ||
+            data.stock > data.capacity
+        ) {
+            console.warn("Product validation failed", {
+                name: data.name,
+                price: data.price,
+                cost: data.cost,
+                stock: data.stock,
+                capacity: data.capacity,
+            });
+            return fail(
+                c,
+                422,
+                "Data produk tidak valid. Pastikan nama, harga jual, dan kapasitas benar.",
+            );
         }
         const result = await c.env.DB.prepare(
             "INSERT INTO products (name, price_per_liter, buying_price_per_liter, current_stock, capacity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
-        ).bind(data.name, money(data.price), money(data.cost), liters(data.stock), liters(data.capacity)).run();
+        )
+            .bind(
+                data.name,
+                money(data.price),
+                money(data.cost),
+                liters(data.stock),
+                liters(data.capacity),
+            )
+            .run();
         const productId = result.meta.last_row_id;
         if (data.stock > 0) {
             await c.env.DB.batch([
-                c.env.DB.prepare("INSERT INTO stock_refills (product_id, liter_added, buying_price_per_liter, total_cost, supplier_note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))")
-                    .bind(productId, liters(data.stock), money(data.cost), money(data.stock * data.cost), data.note),
+                c.env.DB.prepare(
+                    "INSERT INTO stock_refills (product_id, liter_added, buying_price_per_liter, total_cost, supplier_note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+                ).bind(
+                    productId,
+                    liters(data.stock),
+                    money(data.cost),
+                    money(data.stock * data.cost),
+                    data.note,
+                ),
             ]);
         }
-        return c.json({ success: true, data: await c.env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(productId).first() }, 201);
+        return c.json(
+            {
+                success: true,
+                data: await c.env.DB.prepare(
+                    "SELECT * FROM products WHERE id = ?",
+                )
+                    .bind(productId)
+                    .first(),
+            },
+            201,
+        );
     } catch (error) {
-        console.error("Product insert failed", { message: error instanceof Error ? error.message : String(error) });
+        console.error("Product insert failed", {
+            message: error instanceof Error ? error.message : String(error),
+        });
         return fail(c, 500, "Gagal menyimpan produk ke database.");
     }
 });
@@ -504,7 +583,9 @@ app.post("/api/inventory/refill", async (c) => {
     const body = await c.req.json().catch(() => null);
     const productId = positiveInteger(body?.productId ?? body?.product_id);
     const literAdded = positiveNumber(body?.literAdded ?? body?.liter_added);
-    const buyingPricePerLiter = positiveNumber(body?.buyingPricePerLiter ?? body?.buying_price_per_liter);
+    const buyingPricePerLiter = positiveNumber(
+        body?.buyingPricePerLiter ?? body?.buying_price_per_liter,
+    );
     const supplierNote =
         typeof body?.supplierNote === "string"
             ? body.supplierNote.trim().slice(0, 2000)
@@ -533,20 +614,36 @@ app.post("/api/inventory/refill", async (c) => {
     const oldStock = Number(product.current_stock) || 0;
     const oldCost = Number(product.buying_price_per_liter) || 0;
     const newStock = oldStock + addedLiters;
-    const weightedAverageCost = ((oldStock * oldCost) + (addedLiters * buyingPricePerLiter)) / newStock;
+    const weightedAverageCost =
+        (oldStock * oldCost + addedLiters * buyingPricePerLiter) / newStock;
     const totalCost = addedLiters * buyingPricePerLiter;
 
     await c.env.DB.batch([
         c.env.DB.prepare(
             "INSERT INTO stock_refills (product_id, liter_added, buying_price_per_liter, total_cost, supplier_note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
-        ).bind(productId, addedLiters, money(buyingPricePerLiter), money(totalCost), supplierNote || null),
+        ).bind(
+            productId,
+            addedLiters,
+            money(buyingPricePerLiter),
+            money(totalCost),
+            supplierNote || null,
+        ),
         c.env.DB.prepare(
             "UPDATE products SET current_stock = ?, buying_price_per_liter = ?, updated_at = datetime('now') WHERE id = ?",
         ).bind(liters(newStock), money(weightedAverageCost), productId),
     ]);
 
     return c.json(
-        { success: true, data: { productId, literAdded: addedLiters, totalCost: money(totalCost), weightedAverageCost: money(weightedAverageCost), currentStock: liters(newStock) } },
+        {
+            success: true,
+            data: {
+                productId,
+                literAdded: addedLiters,
+                totalCost: money(totalCost),
+                weightedAverageCost: money(weightedAverageCost),
+                currentStock: liters(newStock),
+            },
+        },
         201,
     );
 });
