@@ -1,14 +1,22 @@
 {
   "version": 2,
-  "cleanUrls": true,
+  "functions": {
+    "api/index.php": {
+      "runtime": "vercel-php@0.7.2"
+    }
+  },
   "routes": [
     {
       "src": "/build/(.*)",
       "dest": "/build/$1"
     },
     {
+      "src": "/(favicon.ico|robots.txt)",
+      "dest": "/$1"
+    },
+    {
       "src": "/(.*)",
-      "dest": "/index.html"
+      "dest": "/api/index.php"
     }
   ]
 }
