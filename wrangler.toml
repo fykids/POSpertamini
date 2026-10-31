@@ -1,0 +1,15 @@
+name = "pombensin-d1-bridge"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+[site]
+bucket = "./public"
+
+[vars]
+APP_DEBUG = "false"
+APP_ENV = "production"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pos-pombensin-db"
+database_id = "b00d5e49-c049-4746-9be5-55419b5c9f52"
