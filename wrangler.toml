@@ -9,6 +9,9 @@ bucket = "./public"
 APP_DEBUG = "false"
 APP_ENV = "production"
 
+[build]
+command = "npm run build"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "pos-pombensin-db"
